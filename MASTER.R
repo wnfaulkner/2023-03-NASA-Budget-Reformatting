@@ -96,26 +96,145 @@
   #    as_sheets_id("https://docs.google.com/spreadsheets/d/e/2PACX-1vTU9FhDV4U6X4suHtvoiMLYDN-y56ipoGh-N7n9fNq7BW1PiMsx5fVlj10LsgvTYVbu3CiUDO_WD0We/pubhtml")
   
   setwd(wd)
-  list.files()
+  #list.files()
   
   import.sheetnames <- 
     excel_sheets("Historical NASA Budget Data - The Planetary Society.xlsx") %>%
     .[grepl("FY", .)]
   
-  dat.import.ls <- list()
+  dat.ls <- list()
   
   for(i in 1:length(import.sheetnames)){
     sheetname.i <- import.sheetnames[i]
-    dat.import.ls[[i]] <- read_xlsx("Historical NASA Budget Data - The Planetary Society.xlsx", sheet = sheetname.i)
+    dat.ls[[i]] <- read_xlsx("Historical NASA Budget Data - The Planetary Society.xlsx", sheet = sheetname.i)
+
+    if(ncol(dat.ls[[i]]) == 4){
+      dat.ls[[i]]$Notes <- ""
+    }
   }
   
-  #Adjust names
-  #Add variable for fiscal year
+  names(dat.ls) <- import.sheetnames
+  
+  
+# 2-CLEANING 1 & COMPILATION/STACKING --------------------------------------------------------------------------------	
+  
+  #Add variable for fiscal year, standardize names
+    i = 1
+    #for(i in 1:length(dat.ls)){
+      dat.import.i <- dat.ls[[i]] 
+      
+      #### METHOD FOR MANUALLY MOVED HEADERS (E.G. TAB "FY 2021.2") ####
+      #APPEARS TO BE WORKING TO GET RID OF SUMMED CELLS
+      
+      x<-dat.import.i %>%
+        mutate(
+          num.nas = apply(dat.import.i %>% select(header.1, header.2, header.3, header.4), 1, function(x){x %>% is.na %>% sum})
+          #is.na.header.3 = is.na(header.3),
+          #is.na.header.4 = is.na(header.4)
+        ) %>%
+        group_by(header.1, header.2, header.3) %>%
+        mutate(min.nas = min(num.nas)) %>%
+        ungroup %>%
+        filter(num.nas == min.nas) %>%
+        #filter(header.3 == "Technology demonstration") %>%
+        group_by(header.1, header.2) %>%
+        mutate(min.nas = min(num.nas)) %>%
+        ungroup %>%
+        filter(num.nas == min.nas) %>%
+        group_by(header.1) %>%
+        mutate(min.nas = min(num.nas)) %>%
+        ungroup %>%
+        filter(num.nas == min.nas)
+      
+      
+      ####  METHOD FOR HEADER.LEVEL/HEADER.PARENT (E.G. TAB "FY 2021") ####
+      #NOT WORKING YET
+      
+      dat.import.i$header.import <- paste(dat.import.i$header.parent, dat.import.i$header, sep = "_")
+      
+      dat.import.i.1 <- dat.import.i %>% filter(header.level == 1) %>% select(header)
+      dat.import.i.2 <- dat.import.i %>% filter(header.level == 2) %>% select(header, header.parent)
+      dat.import.i.3 <- dat.import.i %>% filter(header.level == 3) %>% select(header, header.parent)
+      dat.import.i.4 <- dat.import.i %>% filter(header.level == 4) %>% select(header, header.parent)
+      
+      headers.i <- 
+        left_join(
+          dat.import.i.1,
+          dat.import.i.2,
+          by = c("header" = "header.parent"),
+          multiple = "all"
+        ) %>%
+        left_join(
+          ., 
+          dat.import.i.3,
+          by = c("header.y" = "header.parent"),
+          multiple = "all"
+        ) %>%
+        left_join(
+          ., 
+          dat.import.i.4,
+          by = c("header.y.y" = "header.parent"),
+          multiple = "all"
+        ) 
+      
+      names(headers.i) <- c("header.1","header.2","header.3","header.4")
+      
+      headers.i$header.import <- 
+        paste(headers.i$header.1, headers.i$header.2, headers.i$header.3, headers.i$header.4, sep = "_") %>% 
+        sapply(
+          ., 
+          function(x){
+            strsplit(x, "_")
+          }
+        ) %>%
+        lapply(
+          ., 
+          function(x){
+            x[x != "NA"]
+          }
+        ) %>%
+        lapply(
+          ., 
+          function(x){
+            ifelse(length(x) == 1, x, paste(x[length(x)-1], x[length(x)], sep = "_"))   
+          }
+        ) %>%
+        UnlistVector()
+      
+      dat.i <-
+        left_join(
+          headers.i,
+          dat.import.i,
+          by = "header.import"
+        )
+  
+      dat.i$i <- names(dat.ls)[i] %>% tolower %>% gsub("fy","",.) %>% trimws
+      
+      names(dat.i) <- c("header","request","appropriation","actual","notes","fiscal.year")
+      
+      
+      dat.ls[[i]] <- dat.i
+      
+    }
+  
+  #Compile/Stack
+    dat.tb <- do.call(rbind, dat.ls)
+    
+  
+# 3-COMPILATION/STACKING --------------------------------------------------------------------------------	
+  
   #Stack/join
   # have to find a way to designate larger categories and subcategories (done with formatting in original spreadsheet) - config table?
   
-	
-# 2-COMPILATION --------------------------------------------------------------------------------	
+  #Clean Names
+    dat.ls %<>%
+      lapply(
+        ., 
+        function(x){
+          names(x) <- c("header","request","appropriation","actual","notes","fiscal.year")
+        }
+      )
+  
   
   #Stack past and current semester data into single table
   	byscore.tb <-
